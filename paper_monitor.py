@@ -10,6 +10,7 @@ import feedparser
 import anthropic
 import datetime
 import urllib.request
+import urllib.parse
 import xml.etree.ElementTree as ET
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
