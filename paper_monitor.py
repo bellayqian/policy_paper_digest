@@ -27,12 +27,27 @@ ARXIV_CATEGORIES = [
 ]
 
 ARXIV_KEYWORDS = [
-    "electronic health record", "EHR", "Medicare", "Medicaid", "CMS",
-    "health policy", "public policy", "claims data", "administrative data",
-    "insurance", "hospital", "patient outcome", "health care utilization",
-    "social determinants", "Affordable Care Act", "ACA", "Medicaid expansion",
-    "value-based care", "readmission", "mortality", "healthcare cost",
-    "SDOH", "population health", "health disparities", "observational study",
+    # --- 1. 你原有的核心数据与政策底座 (保留并精简) ---
+    "electronic health record", "EHR", "Medicare", "Medicaid", "CMS claims",
+    "health policy", "administrative data", "social determinants of health", "SDOH",
+    "value-based care", "health disparities",
+    
+    # --- 2. 你的特定靶点：心血管、食品安全与最新法案 (新增) ---
+    "cardiovascular", "heart failure", "food insecurity", 
+    "Inflation Reduction Act", "IRA health", "drug pricing",
+    
+    # --- 3. AI 与医疗交叉的“高光”词汇 (新增，用于寻找降维打击的灵感) ---
+    "machine learning healthcare", "deep learning clinical", "predictive modeling",
+    "risk stratification", "patient phenotyping", "clustering health", 
+    "natural language processing clinical", "LLM healthcare", "artificial intelligence medicine",
+    
+    # --- 4. 顶尖的“统计/AI+政策”前沿方法论 (新增，哈佛 PhD 极度看重的硬核词汇) ---
+    "causal inference", # 因果推断（连接AI与政策的绝对核心）
+    "heterogeneous treatment effect", # 异质性治疗效果（用于发现政策对哪些特定人群最有效）
+    "target trial emulation", # 目标试验模拟（目前顶级医学顶刊最爱用的观察性数据分析方法）
+    "algorithmic fairness", # 算法公平性（医保数据叠加AI时，必讲的政治正确与科研热点）
+    "missing data imputation", # 缺失值插补（完美契合我们之前说的预测隐形Food Insecurity）
+    "reinforcement learning healthcare" # 强化学习在医疗决策中的应用
 ]
 
 JOURNAL_RSS_FEEDS = {
@@ -45,14 +60,12 @@ JOURNAL_RSS_FEEDS = {
     "Annals of Internal Med":"https://www.acpjournals.org/action/showFeed?type=etoc&feed=rss&jc=aim",
     "BMJ":                   "https://www.bmj.com/rss/current.xml",
     "Lancet":                "https://www.thelancet.com/rssfeed/lancet_current.xml",
-    "JAGS":                  "https://agsjournals.onlinelibrary.wiley.com/feed/15325415/most-recent",
-    "Medical Care":          "https://journals.lww.com/lww-medicalcare/_layouts/15/oaks.journals/feed.aspx?FeedType=MostPopularArticles",
-    "Health Services Research":"https://onlinelibrary.wiley.com/action/showFeed?jc=14756773&type=etoc&feed=rss",
+    "JAGS":                  "https://agsjournals.onlinelibrary.wiley.com/feed/15325415/most-recent"
 }
 
 # How many papers max per source per day
-MAX_ARXIV_PAPERS   = 8
-MAX_JOURNAL_PAPERS = 3   # per journal
+MAX_ARXIV_PAPERS   = 15
+MAX_JOURNAL_PAPERS = 5   # per journal
 
 # Gmail settings — populated from env vars / GitHub Secrets
 GMAIL_USER     = os.environ.get("GMAIL_USER", "")
@@ -68,7 +81,7 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # ─────────────────────────────────────────────
 def fetch_arxiv_papers():
     """Pull yesterday's papers matching keywords from arXiv categories."""
-    yesterday = (datetime.date.today() - datetime.timedelta(days=4)).strftime("%Y%m%d")
+    yesterday = (datetime.date.today() - datetime.timedelta(days=7)).strftime("%Y%m%d")
     today     = datetime.date.today().strftime("%Y%m%d")
 
     cat_query = " OR ".join(f"cat:{c}" for c in ARXIV_CATEGORIES)
@@ -123,7 +136,7 @@ def fetch_arxiv_papers():
 def fetch_journal_papers():
     """Pull recent papers from journal RSS feeds, filter by keywords."""
     all_papers = []
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=4)
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
 
     for journal, rss_url in JOURNAL_RSS_FEEDS.items():
         try:
@@ -144,6 +157,16 @@ def fetch_journal_papers():
                 abstract = entry.get("summary", entry.get("description", "")).strip()[:2000]
                 url      = entry.get("link", "")
                 authors  = entry.get("author", "")
+
+                # Skip editorials, comments, letters, corrections
+                NON_RESEARCH_PREFIXES = [
+                    "[comment]", "[editorial]", "[letter]", "[correction]", "[erratum]",
+                    "[response]", "[reply]", "[perspective]", "[viewpoint]", "[news]",
+                    "thank you to", "in reply to", "author response",
+                ]
+                if any(title.lower().startswith(p) or p in title.lower() for p in NON_RESEARCH_PREFIXES):
+                    print(f"  ⏭ Skipping non-research: {title[:60]}")
+                    continue
 
                 # Keyword filter
                 combined = (title + " " + abstract).lower()
@@ -171,13 +194,16 @@ def fetch_journal_papers():
 # ─────────────────────────────────────────────
 def summarize_paper(client, paper):
     """Call Claude to produce structured bullet-point summary."""
-    prompt = f"""You are a health policy and health services research expert reviewer.
+    prompt = f"""You are a health policy and health services research expert reviewer. 
+    Analyze this paper based on what is available. If the abstract is brief or lacks specific numbers, 
+    infer the likely study design and methods from the journal, title, and context — and clearly flag 
+    when you are inferring vs. stating confirmed facts. Do NOT write "not specified in abstract." 
+    Instead, reason from available evidence like an expert reviewer would.
 
 Analyze this paper and provide a structured summary:
 
 Title: {paper['title']}
 Source: {paper['source']}
-Authors: {paper['authors']}
 Abstract: {paper['abstract']}
 
 Respond with EXACTLY this format (use the headers as written):
@@ -260,7 +286,6 @@ def build_email_html(papers_with_summaries):
               <h3 style="margin:0 0 6px;font-size:17px;line-height:1.4;color:#111;">
                 <a href="{paper['url']}" style="color:#1a3a5c;text-decoration:none;">{paper['title']}</a>
               </h3>
-              <p style="margin:0 0 14px;font-size:12px;color:#666;">{paper['authors']}</p>
               <div style="font-size:14px;line-height:1.6;">{summary_html}</div>
               <a href="{paper['url']}" style="display:inline-block;margin-top:14px;padding:7px 18px;
                  background:#2563eb;color:#fff;border-radius:6px;font-size:13px;
@@ -368,5 +393,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import urllib.parse  # ensure available
     main()
