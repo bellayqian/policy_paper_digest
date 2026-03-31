@@ -82,7 +82,6 @@ def fetch_arxiv_papers():
         f"&max_results={MAX_ARXIV_PAPERS * 3}"   # fetch more, then keyword-filter
     )
 
-    import urllib.parse
     try:
         with urllib.request.urlopen(url, timeout=30) as resp:
             xml_data = resp.read()
