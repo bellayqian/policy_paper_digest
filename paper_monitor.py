@@ -68,7 +68,7 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 # ─────────────────────────────────────────────
 def fetch_arxiv_papers():
     """Pull yesterday's papers matching keywords from arXiv categories."""
-    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+    yesterday = (datetime.date.today() - datetime.timedelta(days=4)).strftime("%Y%m%d")
     today     = datetime.date.today().strftime("%Y%m%d")
 
     cat_query = " OR ".join(f"cat:{c}" for c in ARXIV_CATEGORIES)
@@ -123,7 +123,7 @@ def fetch_arxiv_papers():
 def fetch_journal_papers():
     """Pull recent papers from journal RSS feeds, filter by keywords."""
     all_papers = []
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=30)
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=4)
 
     for journal, rss_url in JOURNAL_RSS_FEEDS.items():
         try:
