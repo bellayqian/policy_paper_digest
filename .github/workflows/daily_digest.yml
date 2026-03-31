@@ -1,0 +1,32 @@
+name: Daily Paper Digest
+
+on:
+  schedule:
+    # Runs at 8:00 AM Eastern (13:00 UTC). Adjust if you want a different time.
+    - cron: '0 13 * * *'
+  workflow_dispatch:   # ← lets you also trigger manually from GitHub UI (for testing)
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run paper monitor
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_USER:        ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS:    ${{ secrets.GMAIL_APP_PASS }}
+          RECIPIENT_EMAIL:   ${{ secrets.RECIPIENT_EMAIL }}
+        run: python paper_monitor.py
