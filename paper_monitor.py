@@ -4,6 +4,7 @@ Monitors arXiv + journal RSS / PubMed feeds, summarizes with Claude, sends Gmail
 """
 
 import os
+import re
 import json
 import smtplib
 import feedparser
@@ -244,42 +245,50 @@ def fetch_pubmed_papers():
 # ─────────────────────────────────────────────
 def summarize_paper(client, paper):
     """Call Claude to produce structured bullet-point summary."""
-    prompt = f"""You are a health policy and health services research expert reviewer. 
-    Analyze this paper based on what is available. If the abstract is brief or lacks specific numbers, 
-    infer the likely study design and methods from the journal, title, and context — and clearly flag 
-    when you are inferring vs. stating confirmed facts. Do NOT write "not specified in abstract." 
-    Instead, reason from available evidence like an expert reviewer would.
+    prompt = f"""You are a health policy and health services research expert reviewer.
+Analyze this paper and provide a structured summary.
 
-Analyze this paper and provide a structured summary:
+If the abstract is brief or lacks specific numbers, infer likely methods from the journal/title/context
+and clearly prefix those sentences with "Likely:" — do NOT use brackets like [INFERRED] or [comment].
+
+STRICT FORMATTING RULES — failure to follow these will make the output unusable:
+- Do NOT use markdown: no **bold**, no *italics*, no # headers, no --- dividers
+- Do NOT use brackets [ ] anywhere in your response
+- Write bullets as plain "• text" only — no nested bullets
+- Numbers and percentages are fine; markdown symbols are not
+- Be direct and concise — no filler phrases like "it is worth noting" or "it is important to highlight"
 
 Title: {paper['title']}
 Source: {paper['source']}
 Abstract: {paper['abstract']}
 
-Respond with EXACTLY this format (use the headers as written):
+Respond with EXACTLY this format:
 
 📋 ONE-LINER
-[One sentence: what the paper does and the main finding]
+One sentence: what the paper does and the main finding.
 
 🔬 STUDY DESIGN
-[Bullet: study type — RCT, cohort, difference-in-differences, cross-sectional, etc.]
+- Study type: RCT / cohort / difference-in-differences / cross-sectional / etc.
 
 🗃️ DATA & DATASET
-[Bullet: exact dataset name, sample size if mentioned, time period, geography]
+- Dataset name, sample size if mentioned, time period, geography.
 
 ⚙️ KEY METHOD
-[Bullet: main analytical method — IV, PSM, DiD, regression discontinuity, ML approach, etc.]
+- Main analytical method: IV, PSM, DiD, regression discontinuity, ML, etc.
 
 📊 MAIN FINDINGS
-[2-3 bullets: specific results with numbers/effect sizes where available]
+- Finding 1 with numbers if available.
+- Finding 2 with numbers if available.
+- Finding 3 if applicable.
 
 🏅 WHY TOP JOURNAL?
-[2 bullets: what makes this novel or impactful enough for {paper['source']} — be specific and critical]
+- Novelty or impact point 1.
+- Novelty or impact point 2.
 
 ⚠️ LIMITATION TO WATCH
-[1 bullet: the most important caveat]
+- The single most important caveat.
 
-Keep each bullet concise (1-2 sentences max). Be direct and analytical."""
+Each bullet must be 1-2 plain sentences. No markdown symbols anywhere."""
 
     try:
         message = client.messages.create(
@@ -320,6 +329,11 @@ def build_email_html(papers_with_summaries):
             summary_html = ""
             for line in summary.strip().split("\n"):
                 line = line.strip()
+                # Strip any markdown Claude sneaks in despite instructions
+                line = re.sub(r'\*\*(.+?)\*\*', r'\1', line)   # **bold**
+                line = re.sub(r'\*(.+?)\*',   r'\1', line)      # *italic*
+                line = re.sub(r'\[(.+?)\]',   r'\1', line)      # [brackets]
+                line = re.sub(r'^#+\s*',       '',    line)      # # headers
                 if not line:
                     summary_html += "<br>"
                 elif line.startswith(("📋","🔬","🗃️","⚙️","📊","🏅","⚠️")):
