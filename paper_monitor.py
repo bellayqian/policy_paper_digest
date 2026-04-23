@@ -1,6 +1,6 @@
 """
 Daily Academic Paper Monitor
-Monitors arXiv + journal RSS feeds, summarizes with Claude, sends Gmail digest.
+Monitors arXiv + journal RSS / PubMed feeds, summarizes with Claude, sends Gmail digest.
 """
 
 import os
@@ -47,7 +47,11 @@ ARXIV_KEYWORDS = [
     "target trial emulation", # 目标试验模拟（目前顶级医学顶刊最爱用的观察性数据分析方法）
     "algorithmic fairness", # 算法公平性（医保数据叠加AI时，必讲的政治正确与科研热点）
     "missing data imputation", # 缺失值插补（完美契合我们之前说的预测隐形Food Insecurity）
-    "reinforcement learning healthcare" # 强化学习在医疗决策中的应用
+    "reinforcement learning healthcare", # 强化学习在医疗决策中的应用
+
+    # Updates Apr 22
+    "insulin", "out-of-pocket", "drug spending", "prescription drug", 
+    "Medicare Part D", "IRA cap", "cost sharing",
 ]
 
 JOURNAL_RSS_FEEDS = {
@@ -65,7 +69,7 @@ JOURNAL_RSS_FEEDS = {
 
 # How many papers max per source per day
 MAX_ARXIV_PAPERS   = 15
-MAX_JOURNAL_PAPERS = 5   # per journal
+MAX_JOURNAL_PAPERS = 10   # per journal
 
 # Gmail settings — populated from env vars / GitHub Secrets
 GMAIL_USER     = os.environ.get("GMAIL_USER", "")
@@ -131,7 +135,7 @@ def fetch_arxiv_papers():
 
 
 # ─────────────────────────────────────────────
-# JOURNAL RSS FETCHER
+# JOURNAL RSS / PubMed FETCHER
 # ─────────────────────────────────────────────
 def fetch_journal_papers():
     """Pull recent papers from journal RSS feeds, filter by keywords."""
@@ -188,6 +192,52 @@ def fetch_journal_papers():
 
     return all_papers
 
+def fetch_pubmed_papers():
+    """Search PubMed as a safety net for papers RSS might miss."""
+    keywords = ["Medicare insulin", "Medicare drug spending", 
+                "health policy Medicare", "Medicaid spending"]
+    
+    all_papers = []
+    cutoff_days = 8  # slightly wider than RSS window
+    
+    for kw in keywords:
+        url = (
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+            f"?db=pubmed&term={urllib.parse.quote(kw)}"
+            f"&reldate={cutoff_days}&datetype=pdat"
+            f"&retmax=10&retmode=json"
+        )
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                ids = json.loads(r.read())["esearchresult"]["idlist"]
+            
+            for pmid in ids:
+                fetch_url = (
+                    "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+                    f"?db=pubmed&id={pmid}&retmode=xml"
+                )
+                with urllib.request.urlopen(fetch_url, timeout=15) as r:
+                    xml = r.read().decode()
+                root = ET.fromstring(xml)
+                article = root.find(".//Article")
+                if not article:
+                    continue
+                title = article.findtext(".//ArticleTitle", "").strip()
+                abstract = article.findtext(".//AbstractText", "").strip()[:2000]
+                journal = article.findtext(".//Journal/Title", "PubMed").strip()
+                
+                all_papers.append({
+                    "source": journal,
+                    "title": title,
+                    "abstract": abstract,
+                    "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                    "authors": "",
+                })
+        except Exception as e:
+            print(f"PubMed error for '{kw}': {e}")
+    
+    print(f"PubMed: found {len(all_papers)} papers")
+    return all_papers
 
 # ─────────────────────────────────────────────
 # CLAUDE SUMMARIZER
@@ -366,10 +416,17 @@ def main():
     print("📡 Fetching arXiv papers...")
     arxiv_papers = fetch_arxiv_papers()
 
-    print("\n📰 Fetching journal RSS feeds...")
+    print("\n📰 Fetching journal RSS / PubMed feeds...")
     journal_papers = fetch_journal_papers()
+    pubmed_papers = fetch_pubmed_papers()
+    seen_titles = set()
+    all_papers = []
+    for p in arxiv_papers + journal_papers + pubmed_papers:
+        key = p["title"].lower().strip()[:80]   # normalize for matching
+        if key not in seen_titles:
+            seen_titles.add(key)
+            all_papers.append(p)
 
-    all_papers = arxiv_papers + journal_papers
     print(f"\n✅ Total: {len(all_papers)} papers to summarize\n")
 
     if not all_papers:
