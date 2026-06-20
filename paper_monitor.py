@@ -6,6 +6,7 @@ Monitors arXiv + journal RSS / PubMed feeds, summarizes with Claude, sends Gmail
 import os
 import re
 import json
+import time
 import smtplib
 import feedparser
 import anthropic
@@ -25,6 +26,8 @@ ARXIV_CATEGORIES = [
     "stat.AP",       # Applied Statistics (CMS/EHR methods)
     "cs.CY",         # Computers & Society (health IT / EHR)
     "q-bio.PE",      # Populations & Evolution (public health)
+    "stat.ME",       # Methodology -- THE home of new causal-inference estimators/theory
+    "econ.EM",       # Econometrics -- DML, synthetic control, IV innovations land here
 ]
 
 ARXIV_KEYWORDS = [
@@ -53,13 +56,35 @@ ARXIV_KEYWORDS = [
     # Updates Apr 22
     "insulin", "out-of-pocket", "drug spending", "prescription drug", 
     "Medicare Part D", "IRA cap", "cost sharing",
+
+    # --- 5. Core RWE / causal inference METHODS terms (added Jun 20) ---
+    "doubly robust", "double machine learning", "debiased machine learning",
+    "marginal structural model", "synthetic control", "instrumental variable",
+    "regression discontinuity", "transportability", "generalizability of trial results",
+    "proximal causal inference", "targeted maximum likelihood", "TMLE",
+    "negative control outcome", "real-world evidence", "external control arm",
+    "g-computation", "g-formula", "semiparametric efficient",
 ]
 
 JOURNAL_RSS_FEEDS = {
     "NEJM":                  "https://www.nejm.org/action/showFeed?jc=nejm&type=etoc&feed=rss",
-    "JAMA":                  "https://jamanetwork.com/rss/site_3/67.xml",
-    "JAMA Internal Medicine":"https://jamanetwork.com/rss/site_3/73.xml",
-    "JAMA Health Forum":     "https://jamanetwork.com/rss/site_3/157.xml",
+    # JAMA's "Current Issue" feed only includes articles once they're formally
+    # slotted into a print issue -- per JAMA's own RSS docs, "New Online"/
+    # "Online First" is the feed that updates daily with everything published
+    # in the last 30 days. This is *why* the Myerson insulin/IRA paper (JAMA,
+    # published online June 6, 2026) never showed up: it was Online First for
+    # a while before any "Current Issue" ever picked it up, and by the time it
+    # might have, it had likely already aged out of the 7-day lookback below.
+    "JAMA (Online First)":   "https://jamanetwork.com/rss/site_3/onlineFirst_67.xml",
+    "JAMA (Current Issue)":  "https://jamanetwork.com/rss/site_3/67.xml",
+    # JAMA Internal Medicine -- previous URL (site_3/73.xml) used JAMA's own
+    # site ID instead of JAMA IM's; corrected to site_15, with Online First added.
+    "JAMA IM (Online First)":"https://jamanetwork.com/rss/site_15/onlineFirst_71.xml",
+    "JAMA IM (Current Issue)":"https://jamanetwork.com/rss/site_15/71.xml",
+    # JAMA Health Forum is online-only (no print issue), so it only has one
+    # feed, "New Online". Previous URL (site_3/157.xml) was also wrong (used
+    # JAMA's site ID); corrected to site_193.
+    "JAMA Health Forum":     "https://jamanetwork.com/rss/site_193/185.xml",
     "Health Affairs":        "https://www.healthaffairs.org/rss/site_19/40.xml",
     "AJPH":                  "https://ajph.aphapublications.org/action/showFeed?type=etoc&feed=rss&jc=ajph",
     "Annals of Internal Med":"https://www.acpjournals.org/action/showFeed?type=etoc&feed=rss&jc=aim",
@@ -90,7 +115,13 @@ def fetch_arxiv_papers():
     today     = datetime.date.today().strftime("%Y%m%d")
 
     cat_query = " OR ".join(f"cat:{c}" for c in ARXIV_CATEGORIES)
-    kw_query  = " OR ".join(f'ti:"{k}" OR abs:"{k}"' for k in ARXIV_KEYWORDS[:10])  # URL-safe subset
+    # NOTE: previously this used ARXIV_KEYWORDS[:10], which happened to be the
+    # first 10 *domain* terms (EHR, Medicare, SDOH, etc). That meant pure
+    # methods papers (e.g. a new doubly-robust estimator validated on
+    # simulated data, with no mention of "Medicare" anywhere) were never
+    # even fetched from arXiv -- they'd fail this query before the keyword
+    # filter below ever got a chance to look at them. Use the full list.
+    kw_query  = " OR ".join(f'ti:"{k}" OR abs:"{k}"' for k in ARXIV_KEYWORDS)
     query = f"({cat_query}) AND ({kw_query}) AND submittedDate:[{yesterday}0000 TO {today}2359]"
 
     url = (
@@ -195,12 +226,31 @@ def fetch_journal_papers():
 
 def fetch_pubmed_papers():
     """Search PubMed as a safety net for papers RSS might miss."""
-    keywords = ["Medicare insulin", "Medicare drug spending", 
-                "health policy Medicare", "Medicaid spending"]
-    
+    keywords = [
+        # --- original policy-applied terms ---
+        "Medicare insulin", "Medicare drug spending",
+        "health policy Medicare", "Medicaid spending",
+
+        # --- methods/causal-inference topic queries (added Jun 20) ---
+        "causal inference Medicare", "target trial emulation",
+        "doubly robust estimation health policy", "marginal structural model Medicare",
+        "regression discontinuity health policy", "synthetic control method health",
+        "double machine learning causal", "real-world evidence methods",
+        "transportability generalizability trial", "heterogeneous treatment effect Medicare",
+
+        # --- journal-tag harvests: these PubMed-indexed venues are where new
+        # RWE/causal-inference METHODS get published, regardless of whether
+        # the abstract happens to mention a policy keyword. [ta] = journal
+        # title abbreviation, so each query below pulls everything recent
+        # from that journal rather than filtering by topic. ---
+        '"Stat Med"[ta]', '"Biometrics"[ta]', '"Biostatistics"[ta]',
+        '"Am J Epidemiol"[ta]', '"Epidemiology"[ta]', '"Stat Methods Med Res"[ta]',
+        '"Pharmacoepidemiol Drug Saf"[ta]', '"BMC Med Res Methodol"[ta]',
+    ]
+
     all_papers = []
     cutoff_days = 8  # slightly wider than RSS window
-    
+
     for kw in keywords:
         url = (
             "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
@@ -211,8 +261,9 @@ def fetch_pubmed_papers():
         try:
             with urllib.request.urlopen(url, timeout=15) as r:
                 ids = json.loads(r.read())["esearchresult"]["idlist"]
-            
+
             for pmid in ids:
+                time.sleep(0.34)  # stay under NCBI's ~3 req/sec unauthenticated limit
                 fetch_url = (
                     "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
                     f"?db=pubmed&id={pmid}&retmode=xml"
@@ -234,6 +285,7 @@ def fetch_pubmed_papers():
                     "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
                     "authors": "",
                 })
+            time.sleep(0.34)
         except Exception as e:
             print(f"PubMed error for '{kw}': {e}")
     
@@ -245,11 +297,15 @@ def fetch_pubmed_papers():
 # ─────────────────────────────────────────────
 def summarize_paper(client, paper):
     """Call Claude to produce structured bullet-point summary."""
-    prompt = f"""You are a health policy and health services research expert reviewer.
-Analyze this paper and provide a structured summary.
+    prompt = f"""You are a reviewer with dual expertise: health policy/health services research, AND biostatistics/causal-inference methodology. Analyze this paper and provide a structured summary.
 
 If the abstract is brief or lacks specific numbers, infer likely methods from the journal/title/context
 and clearly prefix those sentences with "Likely:" — do NOT use brackets like [INFERRED] or [comment].
+
+If this is primarily a METHODS/THEORY paper (new estimator, identification strategy, algorithm) rather
+than an applied empirical study, it's fine for STUDY DESIGN and DATA & DATASET to be brief or say
+"Not applicable — methods paper" — don't force-fit a study design that isn't there. Put the real
+substance of a methods paper in METHODOLOGICAL CONTRIBUTION instead.
 
 STRICT FORMATTING RULES — failure to follow these will make the output unusable:
 - Do NOT use markdown: no **bold**, no *italics*, no # headers, no --- dividers
@@ -268,25 +324,31 @@ Respond with EXACTLY this format:
 One sentence: what the paper does and the main finding.
 
 🔬 STUDY DESIGN
-- Study type: RCT / cohort / difference-in-differences / cross-sectional / etc.
+- Study type: RCT / cohort / difference-in-differences / cross-sectional / methods-only / etc.
 
 🗃️ DATA & DATASET
-- Dataset name, sample size if mentioned, time period, geography.
+- Dataset name, sample size if mentioned, time period, geography. Or "Not applicable" / "simulation only".
 
 ⚙️ KEY METHOD
 - Main analytical method: IV, PSM, DiD, regression discontinuity, ML, etc.
+
+🧪 METHODOLOGICAL CONTRIBUTION
+- What is actually new about the estimator/algorithm/identification strategy, and what existing approach
+  it improves on (e.g. relaxes an assumption, reduces bias/variance, handles a new data structure).
+- Whether code or a software package (R/Python/Stata) is mentioned as available.
+- If this paper just applies established methods with no methodological novelty, say so plainly.
 
 📊 MAIN FINDINGS
 - Finding 1 with numbers if available.
 - Finding 2 with numbers if available.
 - Finding 3 if applicable.
 
-🏅 WHY TOP JOURNAL?
+🏅 WHY THIS MATTERS
 - Novelty or impact point 1.
 - Novelty or impact point 2.
 
 ⚠️ LIMITATION TO WATCH
-- The single most important caveat.
+- The single most important caveat, including key identifying assumptions if this is a causal-inference paper.
 
 Each bullet must be 1-2 plain sentences. No markdown symbols anywhere."""
 
@@ -336,7 +398,7 @@ def build_email_html(papers_with_summaries):
                 line = re.sub(r'^#+\s*',       '',    line)      # # headers
                 if not line:
                     summary_html += "<br>"
-                elif line.startswith(("📋","🔬","🗃️","⚙️","📊","🏅","⚠️")):
+                elif line.startswith(("📋","🔬","🗃️","⚙️","🧪","📊","🏅","⚠️")):
                     summary_html += f'<p style="margin:12px 0 4px;font-weight:700;color:#1a3a5c;">{line}</p>'
                 elif line.startswith("- ") or line.startswith("• ") or line.startswith("["):
                     text = line.lstrip("-•[ ]")
