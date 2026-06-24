@@ -116,6 +116,15 @@ JOURNAL_RSS_FEEDS = {
 ```
 To find an RSS feed for any journal, Google: `[journal name] RSS feed`
 
+The RSS feeds above are a hand-picked, trusted list — anything from them goes
+straight through (after the keyword filter). The PubMed *topic* searches in
+`fetch_pubmed_papers()` are different: they do unrestricted text matching, so
+they can return a hit from literally any journal. Those results are checked
+against `JOURNAL_WHITELIST_EXACT` (and the `JOURNAL_WHITELIST_PREFIXES`
+family-prefixes, e.g. `"jama"`) — only journals on that list survive. To add
+a journal to that whitelist, add its PubMed `Journal/Title` name (lowercase)
+to `JOURNAL_WHITELIST_EXACT`.
+
 ### Tune paper volume
 ```python
 MAX_ARXIV_PAPERS   = 8    # arXiv papers per day

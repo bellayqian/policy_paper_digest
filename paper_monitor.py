@@ -93,6 +93,86 @@ JOURNAL_RSS_FEEDS = {
     "JAGS":                  "https://agsjournals.onlinelibrary.wiley.com/feed/15325415/most-recent"
 }
 
+# ─────────────────────────────────────────────
+# JOURNAL WHITELIST
+# fetch_pubmed_papers()'s topic-keyword queries (e.g. "causal inference
+# Medicare") do unrestricted PubMed text matching, so they will return a
+# paper from ANY journal that happens to contain those words -- this is how
+# "Fly", "Hernia", "Indian Pediatrics" etc. got into past digests. This
+# whitelist is checked against PubMed's own Journal/Title field and only
+# papers from a listed journal survive.
+#
+# It does NOT touch fetch_journal_papers() (the curated RSS feeds above) --
+# those are already a trusted, hand-picked set.
+#
+# Matching is exact (after lowercasing, dropping a trailing "(...)"
+# disambiguator like "(Cambridge, Mass.)", and dropping a leading "The "),
+# except for JOURNAL_WHITELIST_PREFIXES, which is for journal *families*
+# where every member is in-scope (currently just "jama", which covers JAMA,
+# JAMA Internal Medicine, JAMA Health Forum, JAMA Cardiology, JAMA Oncology,
+# etc. -- since the topic query already restricts to Medicare/causal-
+# inference/etc. content, a JAMA-family hit is trusted without listing every
+# spinoff by hand).
+#
+# To add a journal: add its PubMed "Journal/Title" name (lowercase) to
+# JOURNAL_WHITELIST_EXACT. If unsure of the exact PubMed title, search the
+# journal name at https://pubmed.ncbi.nlm.nih.gov and check the citation.
+JOURNAL_WHITELIST_EXACT = {
+    # -- core health policy / health services research --
+    "health affairs",
+    "health affairs scholar",
+    "health economics",
+    "health research policy and systems",
+    "bmc health services research",
+
+    # -- core biostatistics / causal-inference methods --
+    # (these 8 are also explicitly journal-tag-harvested below in
+    # fetch_pubmed_papers; listed here too so this filter is a no-op for them
+    # rather than accidentally excluding them)
+    "biometrics",
+    "biostatistics",
+    "statistics in medicine",
+    "epidemiology",
+    "american journal of epidemiology",
+    "statistical methods in medical research",
+    "pharmacoepidemiology and drug safety",
+    "bmc medical research methodology",
+    "journal of clinical epidemiology",
+
+    # -- major outcomes journals matching your CV team / current projects --
+    "journal of the american college of cardiology",
+    "obstetrics and gynecology",
+    "journal of the american geriatrics society",   # = "JAGS"
+    "diabetes care",
+    "bmc medicine",
+
+    # -- already-trusted via the RSS feeds above; added here too so a
+    # PubMed-path hit for the same journal isn't dropped for inconsistency --
+    "new england journal of medicine",
+    "lancet",
+    "bmj",
+    "annals of internal medicine",
+    "american journal of public health",
+}
+
+JOURNAL_WHITELIST_PREFIXES = (
+    "jama",   # covers the whole JAMA Network family
+)
+
+def _normalize_journal(name):
+    name = name.lower().strip()
+    name = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()   # drop trailing "(...)"
+    if name.startswith("the "):
+        name = name[4:]
+    return name
+
+def is_whitelisted_journal(journal_name):
+    norm = _normalize_journal(journal_name)
+    if norm in JOURNAL_WHITELIST_EXACT:
+        return True
+    return any(norm.startswith(p) for p in JOURNAL_WHITELIST_PREFIXES)
+
+
 # How many papers max per source per day
 MAX_ARXIV_PAPERS   = 15
 MAX_JOURNAL_PAPERS = 10   # per journal
@@ -277,7 +357,11 @@ def fetch_pubmed_papers():
                 title = article.findtext(".//ArticleTitle", "").strip()
                 abstract = article.findtext(".//AbstractText", "").strip()[:2000]
                 journal = article.findtext(".//Journal/Title", "PubMed").strip()
-                
+
+                if not is_whitelisted_journal(journal):
+                    print(f"  ⏭ Skipping non-whitelisted journal: {journal}")
+                    continue
+
                 all_papers.append({
                     "source": journal,
                     "title": title,
