@@ -177,6 +177,40 @@ def is_whitelisted_journal(journal_name):
 MAX_ARXIV_PAPERS   = 15
 MAX_JOURNAL_PAPERS = 10   # per journal
 
+# ─────────────────────────────────────────────
+# NON-RESEARCH FILTERS
+# Two filters for the same goal (drop comments/letters/corrections/reviews),
+# using whichever signal each source actually gives us:
+#
+# 1. NON_RESEARCH_PREFIXES -- title-text matching, used by
+#    fetch_journal_papers() (RSS feeds), since RSS entries are just a title
+#    string with no structured "this is a Review" field.
+#
+# 2. NON_RESEARCH_PUBLICATION_TYPES -- used by fetch_pubmed_papers(), which
+#    *does* get a structured <PublicationType> list per article from PubMed
+#    (e.g. "Review", "Comment", "Published Erratum") -- a far more reliable
+#    signal than scanning the title. This is matched against the lowercased
+#    PublicationType text. Note this previously didn't exist at all for the
+#    PubMed path, which is why corrections/reviews/comments pulled in via the
+#    journal-tag-harvest queries (which grab *everything* recent from a
+#    journal, not just topic matches) were getting through.
+# ─────────────────────────────────────────────
+NON_RESEARCH_PREFIXES = [
+    "[comment]", "[editorial]", "[letter]", "[correction]", "[erratum]",
+    "[response]", "[reply]", "[perspective]", "[viewpoint]", "[news]",
+    "[review]", "[systematic review]",
+    "thank you to", "in reply to", "author response",
+]
+
+NON_RESEARCH_PUBLICATION_TYPES = {
+    "comment", "editorial", "letter", "news",
+    "published erratum", "corrected and republished article",
+    "retraction of publication", "retracted publication",
+    "review", "systematic review",
+    "biography", "interview", "congress", "newspaper article",
+    "patient education handout", "video-audio media",
+}
+
 # Gmail settings — populated from env vars / GitHub Secrets
 GMAIL_USER     = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASS = os.environ.get("GMAIL_APP_PASS", "")
@@ -274,12 +308,7 @@ def fetch_journal_papers():
                 url      = entry.get("link", "")
                 authors  = entry.get("author", "")
 
-                # Skip editorials, comments, letters, corrections
-                NON_RESEARCH_PREFIXES = [
-                    "[comment]", "[editorial]", "[letter]", "[correction]", "[erratum]",
-                    "[response]", "[reply]", "[perspective]", "[viewpoint]", "[news]",
-                    "thank you to", "in reply to", "author response",
-                ]
+                # Skip editorials, comments, letters, corrections, reviews
                 if any(title.lower().startswith(p) or p in title.lower() for p in NON_RESEARCH_PREFIXES):
                     print(f"  ⏭ Skipping non-research: {title[:60]}")
                     continue
@@ -357,6 +386,16 @@ def fetch_pubmed_papers():
                 title = article.findtext(".//ArticleTitle", "").strip()
                 abstract = article.findtext(".//AbstractText", "").strip()[:2000]
                 journal = article.findtext(".//Journal/Title", "PubMed").strip()
+
+                # PubMed tags every article with one or more PublicationType
+                # values (e.g. "Journal Article", "Review", "Comment"). This
+                # is the gap that let corrections/reviews/comments through:
+                # this filter didn't exist on the PubMed path at all before.
+                pub_types = [pt.text.strip().lower() for pt in article.findall(".//PublicationType") if pt.text]
+                non_research_hits = NON_RESEARCH_PUBLICATION_TYPES.intersection(pub_types)
+                if non_research_hits:
+                    print(f"  ⏭ Skipping non-research ({', '.join(non_research_hits)}): {title[:60]}")
+                    continue
 
                 if not is_whitelisted_journal(journal):
                     print(f"  ⏭ Skipping non-whitelisted journal: {journal}")

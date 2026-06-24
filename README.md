@@ -117,13 +117,26 @@ JOURNAL_RSS_FEEDS = {
 To find an RSS feed for any journal, Google: `[journal name] RSS feed`
 
 The RSS feeds above are a hand-picked, trusted list — anything from them goes
-straight through (after the keyword filter). The PubMed *topic* searches in
-`fetch_pubmed_papers()` are different: they do unrestricted text matching, so
-they can return a hit from literally any journal. Those results are checked
-against `JOURNAL_WHITELIST_EXACT` (and the `JOURNAL_WHITELIST_PREFIXES`
-family-prefixes, e.g. `"jama"`) — only journals on that list survive. To add
-a journal to that whitelist, add its PubMed `Journal/Title` name (lowercase)
-to `JOURNAL_WHITELIST_EXACT`.
+straight through (after the keyword filter and the non-research-type filter
+below). The PubMed *topic* searches in `fetch_pubmed_papers()` are different:
+they do unrestricted text matching, so they can return a hit from literally
+any journal. Those results are checked against `JOURNAL_WHITELIST_EXACT`
+(and the `JOURNAL_WHITELIST_PREFIXES` family-prefixes, e.g. `"jama"`) — only
+journals on that list survive. To add a journal to that whitelist, add its
+PubMed `Journal/Title` name (lowercase) to `JOURNAL_WHITELIST_EXACT`.
+
+### Filtering out corrections, reviews, comments, letters
+Two separate filters handle this, since the two sources give different
+signals:
+- RSS feeds only have a title string, so `NON_RESEARCH_PREFIXES` matches
+  against title text (e.g. `"[review]"`, `"[correction]"`).
+- PubMed gives a structured `PublicationType` per article (e.g. `"Review"`,
+  `"Comment"`, `"Published Erratum"`), which is far more reliable — that's
+  `NON_RESEARCH_PUBLICATION_TYPES`. This previously didn't exist for the
+  PubMed path at all, which is why these were slipping through, especially
+  from the journal-tag-harvest queries (which pull *everything* recent from
+  a journal, not just topic matches).
+Add to either list to exclude more types.
 
 ### Tune paper volume
 ```python
