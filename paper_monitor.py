@@ -198,8 +198,8 @@ MAX_JOURNAL_PAPERS = 10   # per journal
 NON_RESEARCH_PREFIXES = [
     "[comment]", "[editorial]", "[letter]", "[correction]", "[erratum]",
     "[response]", "[reply]", "[perspective]", "[viewpoint]", "[news]",
-    "[review]", "[systematic review]",
-    "thank you to", "in reply to", "author response",
+    "[review]", "[systematic review]", "[correspondence]",
+    "thank you to", "in reply to", "author response", "call for papers",
 ]
 
 NON_RESEARCH_PUBLICATION_TYPES = {
@@ -307,6 +307,12 @@ def fetch_journal_papers():
                 abstract = entry.get("summary", entry.get("description", "")).strip()[:2000]
                 url      = entry.get("link", "")
                 authors  = entry.get("author", "")
+                
+                # Skip placeholder/category entries where the "article" is
+                # just the journal's own name with no real title/abstract
+                if title.strip().lower() == journal.strip().lower():
+                    print(f"  ⏭ Skipping placeholder entry: {title[:60]}")
+                    continue
 
                 # Skip editorials, comments, letters, corrections, reviews
                 if any(title.lower().startswith(p) or p in title.lower() for p in NON_RESEARCH_PREFIXES):
